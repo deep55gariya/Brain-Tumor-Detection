@@ -1,7 +1,6 @@
 import os
 import cv2
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import tensorflow as tf
@@ -20,12 +19,10 @@ from plotly import graph_objs as go
 # Streamlit Configuration
 st.set_page_config(page_title="Brain Tumor Detection", layout="wide")
 
+# Load data function
 def load_data(dir_path, img_size=(100, 100)):
-    x = []
-    y = []
-    i = 0
-    labels = {}
-    for path in sorted(os.listdir(dir_path)):
+    x, y, labels = [], [], {}
+    for i, path in enumerate(sorted(os.listdir(dir_path))):
         if not path.startswith('.'):
             labels[i] = path
             for file in os.listdir(os.path.join(dir_path, path)):
@@ -34,12 +31,9 @@ def load_data(dir_path, img_size=(100, 100)):
                     img = cv2.resize(img, img_size)
                     x.append(img)
                     y.append(i)
-            i += 1
-    x = np.array(x)
-    y = np.array(y)
-    return x, y, labels
+    return np.array(x), np.array(y), labels
 
-import itertools
+# Plot confusion matrix function
 def plot_confusion_matrix(cm, classes, normalize=False, title='Confusion matrix', cmap=plt.cm.Blues):
     plt.figure(figsize=(6, 6))
     plt.imshow(cm, interpolation='nearest', cmap=cmap)
@@ -47,36 +41,33 @@ def plot_confusion_matrix(cm, classes, normalize=False, title='Confusion matrix'
     plt.colorbar()
     tick_marks = np.arange(len(classes))
     plt.xticks(tick_marks, classes, rotation=90)
-    plt.yticks(tick_marks, classes)
+    plt.yticks(tick_marks)
     if normalize:
         cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
     thresh = cm.max() / 2.
     cm = np.round(cm, 2)
     for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
-        plt.text(j, i, cm[i, j],
-                 horizontalalignment="center",
+        plt.text(j, i, cm[i, j], horizontalalignment="center",
                  color="white" if cm[i, j] > thresh else "black")
     plt.tight_layout()
     plt.ylabel('True label')
     plt.xlabel('Predicted label')
     st.pyplot(plt)
 
+# Plot samples function
 def plot_samples(x, y, labels_dict, n=50):
     for index in range(len(labels_dict)):
         imgs = x[np.argwhere(y == index)][:n]
-        j = 10
-        i = int(n / j)
+        j, i = 10, int(n / 10)  # Ensure j is assigned before being used
         plt.figure(figsize=(15, 6))
-        c = 1
-        for img in imgs:
+        for c, img in enumerate(imgs, start=1):
             plt.subplot(i, j, c)
-            plt.imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-            plt.xticks([])
-            plt.yticks([])
-            c += 1
-        plt.suptitle('Tumor: {}'.format(labels_dict[index]))
+            plt.imshow(cv2.cvtColor(img[0], cv2.COLOR_BGR2RGB))
+            plt.xticks([]); plt.yticks([])
+        plt.suptitle(f'Tumor: {labels_dict[index]}')
         st.pyplot(plt)
 
+# Crop images function
 def crop_imgs(set_name, add_pixels_value=0, target_size=(224, 224)):
     set_new = []
     for img in set_name:
@@ -85,62 +76,45 @@ def crop_imgs(set_name, add_pixels_value=0, target_size=(224, 224)):
         thresh = cv2.threshold(gray, 45, 255, cv2.THRESH_BINARY)[1]
         thresh = cv2.erode(thresh, None, iterations=2)
         thresh = cv2.dilate(thresh, None, iterations=2)
-        cnts = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        cnts = imutils.grab_contours(cnts)
-        if len(cnts) == 0:
-            continue
-        c = max(cnts, key=cv2.contourArea)
-        extLeft = tuple(c[c[:, :, 0].argmin()][0])
-        extRight = tuple(c[c[:, :, 0].argmax()][0])
-        extTop = tuple(c[c[:, :, 1].argmin()][0])
-        extBot = tuple(c[c[:, :, 1].argmax()][0])
-        ADD_PIXELS = add_pixels_value
-        new_img = img[extTop[1] - ADD_PIXELS: extBot[1] + ADD_PIXELS, extLeft[0] - ADD_PIXELS: extRight[0] + ADD_PIXELS].copy()
-        
-        # Resize to target size
-        new_img = cv2.resize(new_img, target_size, interpolation=cv2.INTER_CUBIC)
-        
-        # Append only if the resized image has the expected dimensions
-        if new_img.shape == (target_size[1], target_size[0], 3):
-            set_new.append(new_img)
-    
+        cnts = imutils.grab_contours(cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE))
+        if cnts:
+            c = max(cnts, key=cv2.contourArea)
+            extLeft, extRight = tuple(c[c[:, :, 0].argmin()][0]), tuple(c[c[:, :, 0].argmax()][0])
+            extTop, extBot = tuple(c[c[:, :, 1].argmin()][0]), tuple(c[c[:, :, 1].argmax()][0])
+            new_img = img[extTop[1] - add_pixels_value:extBot[1] + add_pixels_value, 
+                          extLeft[0] - add_pixels_value:extRight[0] + add_pixels_value].copy()
+            new_img = cv2.resize(new_img, target_size, interpolation=cv2.INTER_CUBIC)
+            if new_img.shape == (target_size[1], target_size[0], 3):
+                set_new.append(new_img)
     return np.array(set_new)
 
+# Save new images function
 def save_new_images(x_set, y_set, folder_name):
     for i, (img, imclass) in enumerate(zip(x_set, y_set)):
         class_folder = 'YES' if imclass == 1 else 'NO'
         cv2.imwrite(os.path.join(folder_name, class_folder, f'{i}.jpg'), img)
 
+# Preprocess images function
 def preprocess_imgs(set_name, img_size):
-    set_new = []
-    for img in set_name:
-        img = cv2.resize(img, dsize=img_size, interpolation=cv2.INTER_CUBIC)
-        set_new.append(preprocess_input(img))
+    set_new = [preprocess_input(cv2.resize(img, dsize=img_size, interpolation=cv2.INTER_CUBIC)) for img in set_name]
     return np.array(set_new)
 
 # Streamlit UI
 st.title("Brain Tumor Detection")
 
 # Data Directory
-IMG_PATH = "../input/brain-tumor-detection-mri/Brain_Tumor_Detection"
-TRAIN_DIR = 'TRAIN/'
-VAL_DIR = 'VAL/'
-TEST_DIR = 'TEST/'
+IMG_PATH = "C:/Users/user/Desktop/Project/datasets"
+TRAIN_DIR, VAL_DIR, TEST_DIR = 'train/', 'VAL/', 'TEST/'
 IMG_SIZE = (224, 224)
 
 # Load Data
 if st.button("Load Data"):
-    x_train, y_train, labels = load_data(TRAIN_DIR, IMG_SIZE)
-    x_test, y_test, _ = load_data(TEST_DIR, IMG_SIZE)
-    x_val, y_val, _ = load_data(VAL_DIR, IMG_SIZE)
+    x_train, y_train, labels = load_data(os.path.join(IMG_PATH, TRAIN_DIR), IMG_SIZE)
+    x_test, y_test, _ = load_data(os.path.join(IMG_PATH, TEST_DIR), IMG_SIZE)
+    x_val, y_val, _ = load_data(os.path.join(IMG_PATH, VAL_DIR), IMG_SIZE)
     
-    st.session_state.x_train = x_train
-    st.session_state.y_train = y_train
-    st.session_state.labels = labels
-    st.session_state.x_test = x_test
-    st.session_state.y_test = y_test
-    st.session_state.x_val = x_val
-    st.session_state.y_val = y_val
+    st.session_state.update({'x_train': x_train, 'y_train': y_train, 'labels': labels, 
+                             'x_test': x_test, 'y_test': y_test, 'x_val': x_val, 'y_val': y_val})
     
     st.write(f'{len(x_train)} training images loaded.')
     st.write(f'{len(x_test)} testing images loaded.')
@@ -168,12 +142,9 @@ if st.button("Crop Data"):
         plot_samples(x_train_crop, st.session_state.y_train, st.session_state.labels, 30)
 
         # Save Cropped Images
-        os.makedirs('TRAIN_CROP/YES', exist_ok=True)
-        os.makedirs('TRAIN_CROP/NO', exist_ok=True)
-        os.makedirs('VAL_CROP/YES', exist_ok=True)
-        os.makedirs('VAL_CROP/NO', exist_ok=True)
-        os.makedirs('TEST_CROP/YES', exist_ok=True)
-        os.makedirs('TEST_CROP/NO', exist_ok=True)
+        for folder in ['TRAIN_CROP', 'VAL_CROP', 'TEST_CROP']:
+            os.makedirs(os.path.join(folder, 'YES'), exist_ok=True)
+            os.makedirs(os.path.join(folder, 'NO'), exist_ok=True)
 
         save_new_images(x_train_crop, st.session_state.y_train, 'TRAIN_CROP/')
         save_new_images(x_val_crop, st.session_state.y_val, 'VAL_CROP/')
@@ -198,14 +169,12 @@ if st.button("Augment Data"):
         os.makedirs('preview', exist_ok=True)
         x = st.session_state.x_train[0].reshape((1,) + st.session_state.x_train[0].shape)
         
-        i = 0
-        for batch in demo_datagen.flow(x, batch_size=1):
+        for i, batch in enumerate(demo_datagen.flow(x, batch_size=1)):
             plt.figure(figsize=(10, 10))
             plt.imshow(batch[0].astype('uint8'))
             plt.axis('off')
             plt.savefig(f'preview/augmented_{i}.jpg')
-            i += 1
-            if i > 20:
+            if i >= 20:
                 break
         
         st.write("Data augmentation preview saved in 'preview' folder.")
@@ -215,47 +184,65 @@ if st.button("Augment Data"):
 # Model Building
 if st.button("Build and Train Model"):
     if 'x_train' in st.session_state:
+        # Preprocess Images
+        x_train = preprocess_imgs(st.session_state.x_train, IMG_SIZE)
+        x_val = preprocess_imgs(st.session_state.x_val, IMG_SIZE)
+        y_train, y_val = st.session_state.y_train, st.session_state.y_val
+
+        # Model Definition
+        base_model = MobileNet(input_shape=(IMG_SIZE[0], IMG_SIZE[1], 3), include_top=False, pooling='avg', weights='imagenet')
         model = Sequential([
-            MobileNet(weights='imagenet', include_top=False, input_shape=(IMG_SIZE[0], IMG_SIZE[1], 3)),
+            base_model,
             Flatten(),
             BatchNormalization(),
-            Dense(1024, activation='relu'),
-            Dropout(0.5),
+            Dropout(0.7),
             Dense(1, activation='sigmoid')
         ])
-        
+
         model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
-
-        early_stopping = EarlyStopping(monitor='val_loss', patience=5)
-
+        
+        # Model Training
+        early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
         history = model.fit(
-            preprocess_imgs(st.session_state.x_train, IMG_SIZE),
-            st.session_state.y_train,
-            validation_data=(preprocess_imgs(st.session_state.x_val, IMG_SIZE), st.session_state.y_val),
-            epochs=10,
-            batch_size=32,
-            callbacks=[early_stopping]
+            x_train, y_train, epochs=30, validation_data=(x_val, y_val), 
+            callbacks=[early_stop]
         )
 
-        st.write("Model trained successfully.")
-        
-        # Plot training results
-        plt.figure(figsize=(10, 5))
-        plt.plot(history.history['accuracy'], label='Accuracy')
-        plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
-        plt.title('Model Accuracy')
-        plt.xlabel('Epoch')
-        plt.ylabel('Accuracy')
-        plt.legend()
-        st.pyplot(plt)
+        st.session_state.model = model
+        st.write("Model training complete.")
 
-        # Evaluate Model
-        y_pred = (model.predict(preprocess_imgs(st.session_state.x_test, IMG_SIZE)) > 0.5).astype('int32')
-        cm = confusion_matrix(st.session_state.y_test, y_pred)
-        plot_confusion_matrix(cm, ['No', 'Yes'])
-        
+        # Plot Training History
+        fig, axs = plt.subplots(1, 2, figsize=(15, 5))
+        axs[0].plot(history.history['loss'], label='Train Loss')
+        axs[0].plot(history.history['val_loss'], label='Validation Loss')
+        axs[0].set_title('Loss')
+        axs[0].legend()
+
+        axs[1].plot(history.history['accuracy'], label='Train Accuracy')
+        axs[1].plot(history.history['val_accuracy'], label='Validation Accuracy')
+        axs[1].set_title('Accuracy')
+        axs[1].legend()
+
+        st.pyplot(fig)
     else:
         st.warning("Please load the data first.")
+
+# Model Evaluation
+if st.button("Evaluate Model"):
+    if 'model' in st.session_state and 'x_test' in st.session_state:
+        x_test = preprocess_imgs(st.session_state.x_test, IMG_SIZE)
+        y_test = st.session_state.y_test
+        y_pred_prob = st.session_state.model.predict(x_test)
+        y_pred = np.where(y_pred_prob > 0.5, 1, 0)
+        accuracy = accuracy_score(y_test, y_pred)
+        
+        st.write(f"Model Accuracy: {accuracy * 100:.2f}%")
+
+        # Confusion Matrix
+        cm = confusion_matrix(y_test, y_pred)
+        plot_confusion_matrix(cm, classes=['No Tumor', 'Tumor'], title='Confusion Matrix')
+    else:
+        st.warning("Please train the model first.")
 
 # Predict Tumor
 uploaded_file = st.file_uploader("Upload Image", type=["jpg", "jpeg", "png"])
@@ -269,8 +256,8 @@ if uploaded_file:
     image = preprocess_input(image)
 
     # Ensure the model is trained
-    if 'model' in locals():
-        prediction = model.predict(image)
+    if 'model' in st.session_state:
+        prediction = st.session_state.model.predict(image)
         st.write(f'Prediction: {"Tumor Detected" if prediction > 0.5 else "No Tumor Detected"}')
     else:
         st.warning("Please train the model first.")
